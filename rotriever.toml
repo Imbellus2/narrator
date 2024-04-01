@@ -4,3 +4,6 @@ authors = ["astrochilli"]
 license = "MIT License"
 content_root = "narrator"
 version = "1.8.0"
+
+[dependencies]
+# LPeg = "github.com/astrochili/defold-lpeg@1.0.4"
