@@ -1,0 +1,6 @@
+[package]
+name = "Narrator"
+authors = ["astrochilli"]
+license = "MIT License"
+content_root = "narrator"
+version = "1.8.0"
