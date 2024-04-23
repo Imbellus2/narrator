@@ -1,12 +1,12 @@
-local lume = require('narrator.libs.lume')
-local enums = require('narrator.enums')
-local parser = require('narrator.parser')
-local Story = require('narrator.story')
+local lume = require(script.libs.lume)
+local enums = require(script.enums)
+local parser = require(script.parser)
+local Story = require(script.story)
 
 --
 -- Local
 
-local folder_separator = package.config:sub(1, 1)
+local folder_separator = "/"
 
 ---Clear path from '.lua' and '.ink' extensions and replace '.' to '/' or '\'
 ---@param path string

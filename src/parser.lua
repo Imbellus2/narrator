@@ -1,5 +1,5 @@
-local lume = require('narrator.libs.lume')
-local enums = require('narrator.enums')
+local lume = require(script.Parent.libs.lume)
+local enums = require(script.Parent.enums)
 
 --
 -- LPeg
