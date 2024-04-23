@@ -1,7 +1,8 @@
-# System
 .DS_Store
-Thumbs.db
-
-# Defold
-/.internal
-/build
+/*.rbxlx
+*.rbxlx.lock
+Packages/
+rbx-aged-tool.log
+roblox.toml
+docs/
+robloxdev-cli/
