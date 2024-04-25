@@ -1,0 +1,21 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "editor.formatOnSave": true,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false,
+        "editor.renderWhitespace": "all",
+        "editor.formatOnType": true,
+        "robloxLsp.completion.callParenthesess": true,
+        "robloxLsp.completion.endAutocompletion": true,
+        "robloxLsp.hint.returnType": true,
+        "robloxLsp.workspace.loadMode": "Rojo Project",
+        "robloxLsp.intelliSense.searchDepth": 10,
+        "robloxLsp.completion.displayContext": 50,
+        "robloxLsp.typeChecking.showFullType": true,
+    }
+}
