@@ -1,7 +1,7 @@
 --
 -- Dependencies
 
-local lume = require('narrator.libs.lume')
+local lume = require(script.Parent.Parent.libs.lume)
 
 --
 -- Metatable
