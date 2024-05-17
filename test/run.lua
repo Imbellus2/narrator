@@ -11,9 +11,9 @@ if os.getenv('LOCAL_LUA_DEBUGGER_VSCODE') == '1' then
   import('lldebugger').start()
 end
 
-local bot = require('bot')
-local narrator = require('narrator.narrator')
-local lume = require('narrator.libs.lume')
+local bot = require(script.bot)
+local narrator = require(script.narrator.narrator)
+local lume = require(script.narrator.libs.lume)
 
 --
 -- Constants
@@ -225,7 +225,7 @@ end
 -- Main
 
 local case = nil
-local cases = require('test.cases')
+local cases = require(script.test.cases)
 local override_case_results = false
 
 override_random()

@@ -2,7 +2,7 @@
 -- A simple command-line game example
 
 -- Dependencies
-local narrator = require('narrator.narrator')
+local narrator = require(script.narrator.narrator)
 
 -- Parse a book from the Ink file and save as module 'stories.game.lua'
 local book = narrator.parse_file('stories.game', { save = true })

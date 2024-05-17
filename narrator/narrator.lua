@@ -1,7 +1,7 @@
-local lume = require('narrator.libs.lume')
-local enums = require('narrator.enums')
-local parser = require('narrator.parser')
-local Story = require('narrator.story')
+local lume = require(script.narrator.libs.lume)
+local enums = require(script.narrator.enums)
+local parser = require(script.narrator.parser)
+local Story = require(script.narrator.story)
 
 --
 -- Local

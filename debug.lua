@@ -3,8 +3,8 @@
 -- Local Lua Debugger by Tom Blind (https://github.com/tomblind/local-lua-debugger-vscode)
 
 -- Dependencies
-local narrator = require('narrator.narrator')
-local bot = require('bot')
+local narrator = require(script.narrator.narrator)
+local bot = require(script.bot)
 
 -- Loading
 -- local book = require('stories.debug')

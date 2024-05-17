@@ -1,10 +1,10 @@
 --
 -- Dependencies
 
-local classic = require('narrator.libs.classic')
-local lume = require('narrator.libs.lume')
-local enums = require('narrator.enums')
-local list_mt = require('narrator.list.mt')
+local classic = require(script.narrator.libs.classic)
+local lume = require(script.narrator.libs.lume)
+local enums = require(script.narrator.enums)
+local list_mt = require(script.narrator.list.mt)
 
 --
 -- Story
@@ -924,7 +924,7 @@ function story:do_expression(expression)
 
   -- Attach the metatable to list tables
   if #lists > 0 then
-    code = code .. 'local mt = require(\'narrator.list.mt\')\n'
+    code = code .. 'local mt = ' .. list_mt .. '\n'
     code = code .. 'mt.lists = ' .. lume.serialize(self.lists) .. '\n\n'
 
     for index, list in pairs(lists) do
