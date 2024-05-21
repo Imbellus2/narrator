@@ -145,7 +145,39 @@ local narrator = { }
 ---@param book Narrator.Book
 ---@return Narrator.Story
 function narrator.init_story(book)
-  return Story(book)
+  local story = Story(book)
+  story:begin()
+  return story
+end
+
+---Step through story
+---@param story Narrator.Story
+---@return table - Output text
+function narrator.continue(story)
+  local paragraph_table = { }
+  local state = { }
+  if story:can_continue() or story:can_choose() do
+    local paragraphs = story:continue()
+    for _, paragraph in ipairs(paragraphs or { }) do
+      local text = paragraph.text or ''
+      if paragraph.tags then
+        local hashtag = #text > 0 and ' #' or '#'
+        text = text .. hashtag .. table.concat(paragraph.tags, ' #')
+      end
+      table.insert(paragraph_table, text)
+    end
+    local choices = story:get_choices()
+    table.insert(state, { paragraphs = paragraph_table, choices = choices })
+    return state
+  end
+end
+
+---Choose choice in story
+---@param story Narrator.Story
+---@return table - Output text
+function narrator.choose(story, index)
+  story:choose(index)
+  return story
 end
 
 return narrator
