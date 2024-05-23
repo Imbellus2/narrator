@@ -145,7 +145,53 @@ local narrator = { }
 ---@param book Narrator.Book
 ---@return Narrator.Story
 function narrator.init_story(book)
-  return Story(book)
+  local story = Story(book)
+  story:begin()
+  return story
+end
+
+---Step through story
+---@param story Narrator.Story
+---@return table - Output text
+function narrator.continue(story)
+  local paragraph_table = { }
+  if story:can_continue() or story:can_choose() do
+    local paragraphs = story:continue()
+    for _, paragraph in ipairs(paragraphs or { }) do
+      local text = paragraph.text or ''
+      if paragraph.tags then
+        local hashtag = #text > 0 and ' #' or '#'
+        text = text .. hashtag .. table.concat(paragraph.tags, ' #')
+      end
+      table.insert(paragraph_table, text)
+    end
+    local choices = story:get_choices()
+    local state = { paragraphs = paragraph_table, choices = choices }
+    return state
+  end
+end
+
+---Choose choice in story
+---@param story Narrator.Story
+---@param index number
+---@return Narrator.Story
+function narrator.choose(story, index)
+  -- Check if the story can accept a choice
+  if not story:can_choose() then
+    error("Cannot choose at this point in the story.")
+  end
+
+  -- Get the available choices
+  local choices = story:get_choices()
+
+  -- Check if the index is within the valid range
+  if index < 1 or index > #choices then
+    error("Choice index out of range.")
+  end
+
+  -- Make the choice
+  story:choose(index)
+  return story
 end
 
 return narrator
