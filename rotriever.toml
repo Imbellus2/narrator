@@ -3,7 +3,7 @@ name = "Narrator"
 authors = ["astrochilli"]
 license = "MIT License"
 content_root = "src"
-version = "1.8.3"
+version = "1.8.4"
 
 [dependencies]
 # LPeg = "github.com/astrochili/defold-lpeg@1.0.4"
