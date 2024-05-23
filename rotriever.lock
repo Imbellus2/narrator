@@ -4,4 +4,4 @@ lockfile_format_version = 4
 
 [[package]]
 name = "Narrator"
-version = "1.8.0"
+version = "1.8.4"

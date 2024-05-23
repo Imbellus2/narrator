@@ -155,7 +155,7 @@ end
 ---@return table - Output text
 function narrator.continue(story)
   local paragraph_table = { }
-  if story:can_continue() or story:can_choose() do
+  if story:can_continue() or story:can_choose() then
     local paragraphs = story:continue()
     for _, paragraph in ipairs(paragraphs or { }) do
       local text = paragraph.text or ''
