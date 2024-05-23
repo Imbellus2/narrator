@@ -155,7 +155,6 @@ end
 ---@return table - Output text
 function narrator.continue(story)
   local paragraph_table = { }
-  local state = { }
   if story:can_continue() or story:can_choose() do
     local paragraphs = story:continue()
     for _, paragraph in ipairs(paragraphs or { }) do
@@ -167,7 +166,7 @@ function narrator.continue(story)
       table.insert(paragraph_table, text)
     end
     local choices = story:get_choices()
-    table.insert(state, { paragraphs = paragraph_table, choices = choices })
+    local state = { paragraphs = paragraph_table, choices = choices }
     return state
   end
 end
