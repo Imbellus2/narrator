@@ -173,8 +173,23 @@ end
 
 ---Choose choice in story
 ---@param story Narrator.Story
----@return table - Output text
+---@param index number
+---@return Narrator.Story
 function narrator.choose(story, index)
+  -- Check if the story can accept a choice
+  if not story:can_choose() then
+    error("Cannot choose at this point in the story.")
+  end
+
+  -- Get the available choices
+  local choices = story:get_choices()
+
+  -- Check if the index is within the valid range
+  if index < 1 or index > #choices then
+    error("Choice index out of range.")
+  end
+
+  -- Make the choice
   story:choose(index)
   return story
 end
