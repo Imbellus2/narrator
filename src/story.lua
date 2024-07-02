@@ -34,6 +34,7 @@ local list_mt = require(script.Parent.list.mt)
 ---@field private debug_seed any
 ---@field private return_value any
 local story = classic:extend()
+local story_func = {}
 
 --
 -- Initialization
@@ -75,6 +76,45 @@ function story:new(book)
   self.stack = { }
 end
 
+---@private
+---@param book Narrator.Book
+function new(book)
+  local story_table = {}
+  story_table.tree = book.tree
+  story_table.constants = book.constants
+  story_table.variables = lume.clone(book.variables)
+  story_table.lists = book.lists
+  story_table.params = book.params
+
+  story_table.list_mt = list_mt
+  story_table.list_mt.lists = story_table.lists
+
+  story_table.version = book.constants.version or 0
+
+  ---@param state Narrator.State
+  ---@param old_version number
+  ---@param new_version number
+  ---@return Narrator.State
+  story_table.migrate = function(state, old_version, new_version) return story_table end
+
+  story_table.functions = ink_functions(story_table)
+  story_table.observers = { }
+  story_table.global_tags = get_tags(story_table)
+
+  story_table.temp = { }
+  story_table.seeds = { }
+  story_table.choices = { }
+  story_table.paragraphs = { }
+  story_table.output = { }
+  story_table.visits = { }
+  story_table.current_path = nil
+  story_table.is_over = false
+
+  story_table.tunnels = { }
+  story_table.stack = { }
+  return story_table
+end
+
 --
 -- Public
 
@@ -88,10 +128,27 @@ function story:begin()
   self:jump_path('_')
 end
 
+---Start a story
+---Generate the first chunk of paragraphs and choices
+function begin(story_table)
+  if #story_table.paragraphs > 0 or #story_table.choices > 0 then
+    return
+  end
+
+  jump_path(story_table, '_')
+end
+
 ---Does the story have paragraphs to output or not
 ---@return boolean can_continue
 function story:can_continue()
   return #self.paragraphs > 0
+end
+
+---Does the story have paragraphs to output or not
+---@param story_table table story object
+---@return boolean can_continue
+function can_continue(story_table)
+  return #story_table.paragraphs > 0
 end
 
 ---Pull the current paragraphs from the queue.
@@ -125,6 +182,38 @@ function story:continue(steps)
   return single_mode and lines[1] or lines
 end
 
+---Pull the current paragraphs from the queue.
+---@param story_table table object
+---@param steps number|nil Count of paragraphs to pull
+---@return Narrator.Paragraph[]
+function continue(story_table, steps)
+  local lines = { }
+
+  if not can_continue(story_table) then
+    return lines
+  end
+
+  local steps = steps or 0
+  local single_mode = steps == 1
+
+  steps = steps > 0 and steps or #story_table.paragraphs
+  steps = steps > #story_table.paragraphs and #story_table.paragraphs or steps
+
+  for index = 1, steps do
+    local paragraph = story_table.paragraphs[index]
+    paragraph.text = paragraph.text:gsub('^%s*(.-)%s*$', '%1')
+
+    table.insert(lines, paragraph)
+    table.insert(story_table.output, paragraph)
+  end
+
+  for _ = 1, steps do
+    table.remove(story_table.paragraphs, 1)
+  end
+
+  return single_mode and lines[1] or lines
+end
+
 ---Does the story have choices to output or not.
 ---Also returns false if there are available paragraphs to continue.
 ---@return boolean can_choose
@@ -132,17 +221,26 @@ function story:can_choose()
   return self.choices ~= nil and #self.choices > 0 and not self:can_continue()
 end
 
+---Does the story have choices to output or not.
+---Also returns false if there are available paragraphs to continue.
+---@param story_table table object
+---@return boolean can_choose
+function can_choose(story_table)
+  return story_table.choices ~= nil and #story_table.choices > 0 and not can_continue(story_table)
+end
+
 ---Returns an array of available choice titles.
 ---Also returns an empty array if there are available paragraphs to continue.
+---@param story_table table object
 ---@return Narrator.Choice[]
-function story:get_choices()
+function get_choices(story_table)
   local choices = { }
 
-  if self:can_continue() then
+  if can_continue(story_table) then
     return choices
   end
 
-  for _, choice in ipairs(self.choices) do
+  for _, choice in ipairs(story_table.choices) do
     local model = {
       text = choice.title,
       tags = choice.tags
@@ -196,6 +294,49 @@ function story:choose(index)
   end
 end
 
+---Make a choice to continue the story.
+---@param story_table table object
+---@param index number an index of the choice
+function choose(story_table, index)
+  if can_continue(story_table) then
+    return
+  end
+
+  if #story_table.tunnels > 0 then
+    story_table.tunnels[#story_table.tunnels].restore = true
+    -- we are moving to another context, so the last one should be restored on exit from tunnel
+  end
+
+  local choice_is_available = index > 0 and index <= #story_table.choices
+  assert(choice_is_available, 'Choice index ' .. index .. ' out of bounds 1-' .. #story_table.choices)
+
+  local choice = story_table.choices[index]
+  assert(choice, 'Choice index ' .. index .. ' out of bounds 1-' .. #story_table.choices)
+
+  story_table.paragraphs = { }
+  story_table.choices = { }
+
+  if choice.text and #choice.text > 0 then
+    local paragraph = {
+      text = choice.text,
+      tags = choice.tags
+    }
+    table.insert(story_table.paragraphs, paragraph)
+  end
+
+  visit(story_table, choice.path)
+
+  if choice.divert ~= nil then
+    if choice.divert.tunnel then
+      local context = { path = choice.path, restore = true, previous = story_table.current_path }
+      table.insert(story_table.tunnels, context)
+    end
+    jump_path(story_table, choice.divert.path)
+  else
+    read_path(story_table, choice.path)
+  end
+end
+
 ---Jump to the path
 ---@param path_string string a path string like 'knot.stitch.label'
 function story:jump_to(path_string)
@@ -215,6 +356,26 @@ end
 function story:get_tags(path_string)
   local path = self:path_from_string(path_string)
   local items = self:items_for(path.knot, path.stitch)
+  local tags = { }
+
+  for _, item in ipairs(items) do
+    if type(item) == 'table' and lume.count(item) > 1 or item.tags == nil then
+      break
+    end
+
+    local item_tags = type(item.tags) == 'string' and { item.tags } or item.tags
+    tags = lume.concat(tags, item_tags)
+  end
+
+  return tags
+end
+
+---Get tags for the path
+---@param path_string string|nil a path string with knot or stitch
+---@return string[]
+function get_tags(story_table, path_string)
+  local path = path_from_string(story_table, path_string)
+  local items = items_for(story_table, path.knot, path.stitch)
   local tags = { }
 
   for _, item in ipairs(items) do
@@ -351,6 +512,68 @@ function story:path_chain_for_label(path)
 end
 
 ---@private
+function path_chain_for_label(story_table, path)
+  local label = path.label
+  local items = items_for(story_table, path.knot, path.stitch)
+
+  -- TODO: Find a more smart solution to divert to labels
+  -- TODO: This works but... isn't good.
+
+  local function find_label_chain_in_items(items)
+    if type(items) ~= 'table' then
+      return nil
+    end
+
+    for index, item in ipairs(items) do
+
+      if item.label == label then
+        return { index }
+
+      elseif item.node ~= nil then
+        local result = find_label_chain_in_items(item.node)
+
+        if result ~= nil then
+          table.insert(result, 1, index)
+          return result
+        end
+
+      elseif item.success ~= nil then
+        if type(item.success) == 'table' then
+          local is_switch = item.success[1] ~= nil and item.success[1][1] ~= nil
+          local cases = is_switch and item.success or { item.success }
+
+          for case_index, case in ipairs(cases) do
+            local result = find_label_chain_in_items(case)
+
+            if result ~= nil then
+              table.insert(result, 1, 't' .. case_index)
+              table.insert(result, 1, index)
+              return result
+            end
+          end
+        end
+
+        if type(item.failure) == 'table' then
+          local result = find_label_chain_in_items(item.failure)
+
+          if result ~= nil then
+            table.insert(result, 1, 'f')
+            table.insert(result, 1, index)
+            return result
+          end
+        end
+      end
+    end
+
+    return nil
+  end
+
+  local chain = find_label_chain_in_items(items)
+  assert(chain, 'Label \'' ..path.label .. '\' not found')
+  return chain
+end
+
+---@private
 function story:jump_path(path_string, params)
   assert(path_string, 'The path_string can\'t be nil')
 
@@ -368,6 +591,26 @@ function story:jump_path(path_string, params)
   end
 
   return self:read_path(path, params)
+end
+
+---@private
+function jump_path(story_table, path_string, params)
+  assert(path_string, 'The path_string can\'t be nil')
+
+  story_table.choices = { }
+
+  if path_string == 'END' or path_string == 'DONE' then
+    story_table.is_over = true
+    return
+  end
+
+  local path = path_from_string(story_table, path_string, story_table.current_path)
+
+  if path.label ~= nil then
+    path.chain = path_chain_for_label(story_table, path)
+  end
+
+  return read_path(story_table, path, params)
 end
 
 ---@private
@@ -395,8 +638,44 @@ function story:read_path(path, params)
 end
 
 ---@private
+function read_path(story_table, path, params)
+  assert(path, 'The reading path can\'t be nil')
+
+  if story_table.is_over then
+    return
+  end
+
+  -- Visit only the paths without labels.
+  -- Items with labels will increment visits counter by themself in read_items().
+  if not path.label then
+    visit(story_table, path)
+  end
+
+  if params then
+    for name, value in pairs(params) do
+      assign_value_to(story_table, name, value, true)
+    end
+  end
+
+  local items = items_for(story_table, path.knot, path.stitch)
+  return read_items(story_table, items, path)
+end
+
+---@private
 function story:items_for(knot, stitch)
   local root_node = self.tree
+  local knot_node = knot == nil and root_node._ or root_node[knot]
+  assert(knot_node or lume.isarray(root_node), 'The knot \'' .. (knot or '_') .. '\' not found')
+
+  local stitch_node = stitch == nil and knot_node._ or knot_node[stitch]
+  assert(stitch_node or lume.isarray(knot_node), 'The stitch \'' .. (knot or '_') .. '.' .. (stitch or '_') .. '\' not found')
+
+  return stitch_node or knot_node or root_node
+end
+
+---@private
+function items_for(story_table, knot, stitch)
+  local root_node = story_table.tree
   local knot_node = knot == nil and root_node._ or root_node[knot]
   assert(knot_node or lume.isarray(root_node), 'The knot \'' .. (knot or '_') .. '\' not found')
 
@@ -579,6 +858,178 @@ function story:read_items(items, path, depth, mode, current_index)
 end
 
 ---@private
+function read_items(story_table, items, path, depth, mode, current_index)
+  assert(items, 'Items can\'t be nil')
+  assert(path, 'Path can\'t be nil')
+
+  local chain = path.chain or { }
+  local depth = depth or 0
+  local deep_index = chain[depth + 1]
+  local mode = mode or enums.read_mode.text
+
+  -- Deep path factory
+
+  local make_deep_path = function(values, label_prefix)
+    local deep_chain = lume.slice(chain, 1, depth)
+
+    for values_index, value in ipairs(values) do
+      deep_chain[depth + values_index] = value
+    end
+
+    local deep_path = lume.clone(path)
+    deep_path.chain = deep_chain
+
+    if label_prefix then
+      deep_path.label = label_prefix .. table.concat(deep_chain, '.')
+    end
+
+    return deep_path
+  end
+
+  -- Iterate items
+
+  for index = current_index or (deep_index or 1), #items do
+    local context = {
+      items = items,
+      path = path,
+      depth = depth,
+      mode = mode,
+      index = index + 1,
+      previous = story_table.current_path
+    }
+
+    local item = items[index]
+    local skip = false
+
+    if item.return_value then
+      story_table.return_value = tostring(item.return_value)
+      return enums.read_mode.quit
+    end
+
+    local item_type = enums.item.text
+
+    if type(item) == 'table' then
+      if item.choice ~= nil then
+        item_type = enums.item.choice
+      elseif item.success ~= nil then
+        item_type = enums.item.condition
+      elseif item.var ~= nil then
+        item_type = enums.item.variable
+      elseif item.alts ~= nil then
+        item_type = enums.item.alts
+      end
+    end
+
+    -- Go deep
+    if index == deep_index then
+      if item_type == enums.item.choice and item.node ~= nil then
+        -- Go deep to the choice node
+        mode = enums.read_mode.gathers
+        mode = read_items(story_table, item.node, path, depth + 1) or mode
+
+      elseif item_type == enums.item.condition then
+        -- Go deep to the condition node
+        local chain_value = chain[depth + 2]
+        local is_success = chain_value:sub(1, 1) == 't'
+        local node
+
+        if is_success then
+          local success_index = tonumber(chain_value:sub(2, 2)) or 0
+          node = success_index > 0 and item.success[success_index] or item.success
+        else
+          node = item.failure
+        end
+
+        mode = read_items(story_table, node, path, depth + 2, mode) or mode
+      end
+
+      if item_type == enums.item.condition or item_type == enums.item.choice then
+        mode = mode ~= enums.read_mode.quit and enums.read_mode.gathers or mode
+        skip = true
+      end
+    end
+
+    -- Check the situation
+    if mode == enums.read_mode.choices and item_type ~= enums.item.choice then
+      mode = enums.read_mode.quit
+      skip = true
+    elseif mode == enums.read_mode.gathers and item_type == enums.item.choice then
+      skip = true
+    end
+
+    -- Read the item
+    if skip then
+      -- skip
+    elseif item_type == enums.item.text then
+      mode = enums.read_mode.text
+      local safe_item = type(item) == 'string' and { text = item } or item
+      mode = read_text(story_table, safe_item, context) or mode
+    elseif item_type == enums.item.alts then
+      mode = enums.read_mode.text
+      local deep_path = make_deep_path({ index }, '~')
+      mode = read_alts(story_table, item, deep_path, depth + 1, mode) or mode
+    elseif item_type == enums.item.choice and check_condition(story_table, item.condition) then
+      mode = enums.read_mode.choices
+      local deep_path = make_deep_path({ index }, '>')
+      deep_path.label = item.label or deep_path.label
+      mode = read_choice(story_table, item, deep_path) or mode
+
+      if index == #items and type(chain[#chain]) == 'number' then
+        mode = enums.read_mode.quit
+      end
+    elseif item_type == enums.item.condition then
+      local result, chain_value
+
+      if type(item.condition) == 'string' then
+        local success = check_condition(story_table, item.condition)
+        result = success and item.success or (item.failure or { })
+        chain_value = success and 't' or 'f'
+      elseif type(item.condition) == 'table' then
+        local success = check_switch(story_table, item.condition)
+        result = success > 0 and item.success[success] or (item.failure or { })
+        chain_value = success > 0 and ('t' .. success) or 'f'
+      end
+
+      if type(result) == 'string' then
+        mode = enums.read_mode.text
+        mode = read_text(story_table, { text = result }, context) or mode
+      elseif type(result) == 'table' then
+        local deep_path = make_deep_path({ index, chain_value })
+        mode = read_items(story_table, result, deep_path, depth + 2, mode) or mode
+      end
+    elseif item_type == enums.item.variable then
+      assign_value_to(story_table, item.var, item.value, item.temp)
+    end
+
+    -- Read the label
+    if item.label ~= nil and item_type ~= enums.item.choice and not skip then
+      local label_path = lume.clone(path)
+      label_path.label = item.label
+      visit(story_table, label_path)
+    end
+
+    if mode == enums.read_mode.quit then
+      break
+    end
+  end
+
+  if depth == 0 then
+    for index = #story_table.paragraphs, 1, -1 do
+      local paragraph = story_table.paragraphs[index]
+      if (not paragraph.text or #paragraph.text == 0) and (not paragraph.tags or #paragraph.tags == 0) then
+        -- Remove safe prefixes and suffixes of failured inline conditions
+        table.remove(story_table.paragraphs, index)
+      else
+        -- Remove <> tail from unexpectedly broken paragraphs
+        paragraph.text = paragraph.text:match('(.-)%s*<>$') or paragraph.text
+      end
+    end
+  end
+
+  return mode
+end
+
+---@private
 function story:read_text(item, context)
   local text = item.text
   local tags = type(item.tags) == 'string' and { item.tags } or item.tags
@@ -653,6 +1104,80 @@ function story:read_text(item, context)
 end
 
 ---@private
+function read_text(story_table, item, context)
+  local text = item.text
+  local tags = type(item.tags) == 'string' and { item.tags } or item.tags
+  local paragraphs = #story_table.stack == 0 and story_table.paragraphs or story_table.stack[#story_table.stack]
+
+  if text ~= nil or tags ~= nil then
+    local paragraph = { text = text or '<>', tags = tags }
+    local stack
+
+    paragraph.text, stack = replace_expressions(story_table, paragraph.text)
+    paragraph.text = paragraph.text:gsub('%s+', ' ')
+
+    table.insert(stack, paragraph)
+
+    for _, paragraph in ipairs(stack) do
+
+      local glued_by_prev = #paragraphs > 0 and paragraphs[#paragraphs].text:sub(-2) == '<>'
+      local glued_by_this = text ~= nil and text:sub(1, 2) == '<>'
+
+      if glued_by_prev then
+        local prev_paragraph = paragraphs[#paragraphs]
+        prev_paragraph.text = prev_paragraph.text:sub(1, #prev_paragraph.text - 2)
+        paragraphs[#paragraphs] = prev_paragraph
+      end
+
+      if glued_by_this then
+        paragraph.text = paragraph.text:sub(3)
+      end
+
+      if glued_by_prev or (glued_by_this and #paragraphs > 0) then
+        local prev_paragraph = paragraphs[#paragraphs]
+        prev_paragraph.text = (prev_paragraph.text .. paragraph.text):gsub('%s+', ' ')
+        prev_paragraph.tags = lume.concat(prev_paragraph.tags, paragraph.tags)
+        prev_paragraph.tags = #prev_paragraph.tags > 0 and prev_paragraph.tags or nil
+        paragraphs[#paragraphs] = prev_paragraph
+      else
+        table.insert(paragraphs, #paragraphs + 1, paragraph)
+      end
+    end
+  end
+
+  if item.divert ~= nil then
+    if item.divert.tunnel then
+      table.insert(story_table.tunnels, context)
+    end
+
+    local mode = jump_path(story_table, item.divert.path)
+
+    if item.divert.tunnel then
+      return (mode == enums.read_mode.quit and #story_table.choices == 0) and enums.read_mode.text or mode
+    end
+
+    return enums.read_mode.quit
+  end
+
+  if item.exit then
+    local context = assert(table.remove(story_table.tunnels), 'Tunnel stack is empty')
+    story_table.current_path = context.previous
+    if context.restore then
+
+      if context.items == nil then
+        read_path(story_table, context.path)
+        return enums.read_mode.quit
+      end
+
+      read_items(story_table, context.items, context.path, context.depth, context.mode, context.index)
+      return enums.read_mode.quit
+    end
+
+    return enums.read_mode.text
+  end
+end
+
+---@private
 function story:read_alts(item, path, depth, mode)
   assert(item.alts, 'Alternatives can\'t be nil')
   local alts = lume.clone(item.alts)
@@ -696,6 +1221,49 @@ function story:read_alts(item, path, depth, mode)
 end
 
 ---@private
+function read_alts(story_table, item, path, depth, mode)
+  assert(item.alts, 'Alternatives can\'t be nil')
+  local alts = lume.clone(item.alts)
+
+  local sequence = item.sequence or enums.sequence.stopping
+  if type(sequence) == 'string' then
+    sequence = enums.sequence[item.sequence]
+  end
+
+  visit(story_table, path)
+  local visits = get_visits_for_path(story_table, path)
+  local index = 0
+
+  if item.shuffle then
+    local seed_key = (path.knot or '_') .. '.' .. (path.stitch or '_') .. ':' .. path.label
+    local seed = visits % #alts == 1 and (story_table.debug_seed or os.time() * 1000) or story_table.seeds[seed_key]
+    story_table.seeds[seed_key] = seed
+
+    for index, alt in ipairs(alts) do
+      math.randomseed(seed + index)
+
+      local pair_index = index < #alts and math.random(index, #alts) or index
+      alts[index] = alts[pair_index]
+      alts[pair_index] = alt
+    end
+  end
+
+  if sequence == enums.sequence.cycle then
+    index = visits % #alts
+    index = index > 0 and index or #alts
+  elseif sequence == enums.sequence.stopping then
+    index = visits < #alts and visits or #alts
+  elseif sequence == enums.sequence.once then
+    index = visits
+  end
+
+  local alt = index <= #alts and alts[index] or { }
+  local items = type(alt) == 'string' and { alt } or alt
+
+  return read_items(story_table, items, path, depth, mode)
+end
+
+---@private
 function random_seed()
 
 end
@@ -730,6 +1298,39 @@ function story:read_choice(item, path)
 
   if item.sticky or self:get_visits_for_path(path) == 0 then
     table.insert(self.choices, #self.choices + 1, choice)
+  end
+end
+
+---@private
+function read_choice(story_table, item, path)
+  local is_fallback = item.choice == 0
+
+  if is_fallback then
+    -- Works correctly only when a fallback is the last choice
+    if #story_table.choices == 0 then
+      if item.divert ~= nil then
+        jump_path(story_table, item.divert.path)
+      else
+        read_path(story_table, path)
+      end
+    end
+
+    return enums.read_mode.quit
+  end
+
+  local title = replace_expressions(story_table, item.choice)
+  title = title:match('(.-)%s*<>$') or title
+
+  local choice = {
+    title = title,
+    text = item.text ~= nil and replace_expressions(story_table, item.text) or title,
+    divert = item.divert,
+    tags = item.tags,
+    path = path
+  }
+
+  if item.sticky or get_visits_for_path(story_table, path) == 0 then
+    table.insert(story_table.choices, #story_table.choices + 1, choice)
   end
 end
 
@@ -768,9 +1369,52 @@ function story:replace_expressions(text)
 end
 
 ---@private
+function replace_expressions(story_table, text)
+  local stack = { }
+
+  local replaced = text:gsub('%b##', function(match)
+    if #match == 2 then
+      return '#'
+    else
+      local result
+      result, stack = do_expression(story_table, match:sub(2, #match - 1))
+
+      if type(result) == 'table' then
+        result = story_table.list_mt.__tostring(result)
+      elseif type(result) == 'boolean' then
+        result = result and 1 or 0
+      elseif type(result) == 'number' then
+        result = tostring(result)
+
+        if result:sub(-2) == '.0' then
+          result = result:sub(1, -3)
+        end
+      elseif result == nil then
+        result = ''
+      end
+
+      return result
+    end
+  end)
+
+  return replaced, stack
+end
+
+---@private
 function story:check_switch(conditions)
   for index, condition in ipairs(conditions) do
     if self:check_condition(condition) then
+      return index
+    end
+  end
+
+  return 0
+end
+
+---@private
+function check_switch(story_table, conditions)
+  for index, condition in ipairs(conditions) do
+    if check_condition(story_table, condition) then
       return index
     end
   end
@@ -788,6 +1432,25 @@ function story:check_condition(condition)
 
   for _, paragraph in ipairs(stack) do
     table.insert(self.paragraphs, paragraph)
+  end
+
+  if type(result) == 'table' and not next(result) then
+    result = nil
+  end
+
+  return result ~= nil and result ~= false
+end
+
+---@private
+function check_condition(story_table, condition)
+  if condition == nil then
+    return true
+  end
+
+  local result, stack = do_expression(story_table, condition)
+
+  for _, paragraph in ipairs(stack) do
+    table.insert(story_table.paragraphs, paragraph)
   end
 
   if type(result) == 'table' and not next(result) then
@@ -939,6 +1602,148 @@ function story:do_expression(expression)
   return lume.dostring(code), stack
 end
 
+---@private
+function do_expression(story_table, expression)
+  assert(type(expression) == 'string', 'Expression must be a string')
+
+  local code = ''
+  local lists = { }
+  local stack = { }
+
+  -- Replace operators
+  expression = expression:gsub('!=', '~=')
+  expression = expression:gsub('%s*||%s*', ' or ')
+  expression = expression:gsub('%s*%&%&%s*', ' and ')
+  expression = expression:gsub('%s+has%s+', ' ? ')
+  expression = expression:gsub('%s+hasnt%s+', ' !? ')
+  expression = expression:gsub('!%s*%w', ' not ')
+
+  -- Replace functions results
+  expression = expression:gsub('[%a_][%w_]*%b()', function(match)
+    local func_name = match:match('([%a_][%w_]*)%(')
+    local params_string = match:match('[%a_][%w_]*%((.+)%)')
+    local params = params_string ~= nil and lume.map(lume.split(params_string, ','), lume.trim) or nil
+
+    for index, param in ipairs(params or { }) do
+      params[index] = do_expression(story_table, param)
+    end
+
+    local func = story_table.functions[func_name]
+
+    if func ~= nil then
+      local value = func((table.unpack or unpack)(params or { }))
+
+      if type(value) == 'table' then
+        lists[#lists + 1] = value
+        return '__list' .. #lists
+      else
+        return lume.serialize(value)
+      end
+    elseif story_table.lists[func_name] ~= nil then
+      local index = params and params[1] or 0
+      local item = story_table.lists[func_name][index]
+      local list = item and { [func_name] = { [item] = true } } or { }
+
+      lists[#lists + 1] = list
+
+      return '__list' .. #lists
+    else
+      story_table.return_value = nil
+
+      local func_params = { }
+      local path = story_table.current_path
+
+      if params then
+        for i, value in ipairs(params) do
+          func_params[story_table.params[func_name][i]] = tostring(value)
+        end
+      end
+
+      table.insert(story_table.stack, { })
+      jump_path(story_table, func_name, func_params)
+      story_table.current_path = path
+
+      for _, paragraph in ipairs(table.remove(story_table.stack)) do
+        table.insert(stack, paragraph)
+      end
+
+      return story_table.return_value
+    end
+  end)
+
+  -- Replace lists
+  expression = expression:gsub('%(([%s%w%.,_]*)%)', function(match)
+    local list = make_list_for(story_table, match)
+
+    if list ~= nil then
+      lists[#lists + 1] = list
+      return '__list' .. #lists
+    else
+      return 'nil'
+    end
+  end)
+
+  -- Store strings to the bag before to replace variables
+  -- otherwise it can replace strings inside quotes to nils.
+  -- Info: Ink doesn't interpret single quotes '' as string expression value
+  local strings_bag = { }
+  expression = expression:gsub('%b\"\"', function(match)
+    table.insert(strings_bag, match)
+    return '#' .. #strings_bag .. '#'
+  end)
+
+  -- Replace variables
+  expression = expression:gsub('[%a_][%w_%.]*', function(match)
+    local exceptions = { 'and', 'or', 'true', 'false', 'nil', 'not'}
+
+    if lume.find(exceptions, match) or match:match('__list%d*') then
+      return match
+    else
+      local value = get_value_for(story_table, match)
+
+      if type(value) == 'table' then
+        lists[#lists + 1] = value
+        return '__list' .. #lists
+      else
+        return lume.serialize(value)
+      end
+    end
+  end)
+
+  -- Replace with math results
+  expression = expression:gsub('[%a_#][%w_%.#]*[%s]*[%?!]+[%s]*[%a_#][%w_%.#]*', function(match)
+    local lhs, operator, rhs = match:match('([%a_#][%w_%.#]*)[%s]*([%!?]+)[%s]*([%a_#][%w_%.#]*)')
+
+    if lhs:match('__list%d*') then
+      return lhs .. ' % ' .. rhs .. (operator == '?' and ' == true' or ' == false')
+    else
+      return 'string.match(' .. lhs .. ', ' .. rhs .. ')' .. (operator == '?' and ' ~= nil' or ' == nil')
+    end
+  end)
+
+  -- Restore strings after variables replacement
+  expression = expression:gsub('%b##', function(match)
+    local index = tonumber(match:sub(2, -2))
+    return strings_bag[index or 0]
+  end)
+
+  -- Attach the metatable to list tables
+  if #lists > 0 then
+    code = code .. 'local mt = require(\'narrator.list.mt\')\n'
+    code = code .. 'mt.lists = ' .. lume.serialize(story_table.lists) .. '\n\n'
+
+    for index, list in pairs(lists) do
+      local name = '__list' .. index
+
+      code = code .. 'local ' .. name .. ' = ' .. lume.serialize(list) .. '\n'
+      code = code .. 'setmetatable(' .. name .. ', mt)\n\n'
+    end
+  end
+
+  code = code .. 'return ' .. expression
+  return lume.dostring(code), stack
+end
+
 
 -- Variables
 
@@ -966,6 +1771,29 @@ function story:assign_value_to(variable, expression, temp)
 end
 
 ---@private
+function assign_value_to(story_table, variable, expression, temp)
+  if story_table.constants[variable] ~= nil then
+    return
+  end
+  local value = do_expression(story_table, expression)
+
+  if #variable == 0 then
+    return
+  end
+  local storage = (temp or story_table.temp[variable] ~= nil) and story_table.temp or story_table.variables
+
+  if storage[variable] == value then
+    return
+  end
+  storage[variable] = value
+
+  local observer = story_table.observers[variable]
+  if observer ~= nil then
+    observer(value)
+  end
+end
+
+---@private
 function story:get_value_for(variable)
   local result = self.temp[variable]
 
@@ -980,6 +1808,27 @@ function story:get_value_for(variable)
   end
   if result == nil then
     local visits = self:get_visits_with_context(variable, self.current_path)
+    result = visits > 0 and visits or nil
+  end
+
+  return result
+end
+
+---@private
+function get_value_for(story_table, variable)
+  local result = story_table.temp[variable]
+
+  if result == nil then
+    result = story_table.variables[variable]
+  end
+  if result == nil then
+    result = story_table.constants[variable]
+  end
+  if result == nil then
+    result = make_list_for(story_table, variable)
+  end
+  if result == nil then
+    local visits = get_visits_with_context(story_table, variable, story_table.current_path)
     result = visits > 0 and visits or nil
   end
 
@@ -1010,6 +1859,26 @@ function story:make_list_for(expression)
 end
 
 ---@private
+function make_list_for(story_table, expression)
+  local result = { }
+  if not expression:find('%S') then
+    return result
+  end
+
+  local items = lume.array(expression:gmatch('[%w_%.]+'))
+
+  for _, item in ipairs(items) do
+    local list_name, item_name = get_list_name_for(story_table, item)
+    if list_name ~= nil and item_name ~= nil then
+      result[list_name] = result[list_name] or { }
+      result[list_name][item_name] = true
+    end
+  end
+
+  return next(result) ~= nil and result or nil
+end
+
+---@private
 function story:get_list_name_for(name)
   local list_name, item_name = name:match('([%w_]+)%.([%w_]+)')
   item_name = item_name or name
@@ -1026,6 +1895,31 @@ function story:get_list_name_for(name)
   end
 
   local not_found = list_name == nil or self.lists[list_name] == nil
+
+  if not_found then
+    return nil
+  end
+
+  return list_name, item_name
+end
+
+---@private
+function get_list_name_for(story_table, name)
+  local list_name, item_name = name:match('([%w_]+)%.([%w_]+)')
+  item_name = item_name or name
+
+  if list_name == nil then
+    for key, list in pairs(story_table.lists) do
+      for _, string in ipairs(list) do
+        if string == item_name then
+          list_name = key
+          break
+        end
+      end
+    end
+  end
+
+  local not_found = list_name == nil or story_table.lists[list_name] == nil
 
   if not_found then
     return nil
@@ -1073,6 +1967,41 @@ function story:visit(path)
 end
 
 ---@private
+function visit(story_table, path)
+  local path_is_changed = story_table.current_path == nil or path.knot ~= story_table.current_path.knot or path.stitch ~= story_table.current_path.stitch
+
+  if path_is_changed then
+    if story_table.current_path == nil or path.knot ~= story_table.current_path.knot then
+      local knot = path.knot or '_'
+      local visits = story_table.visits[knot] or { _root = 0 }
+
+      visits._root = visits._root + 1
+      story_table.visits[knot] = visits
+    end
+
+    local knot, stitch = path.knot or '_', path.stitch or '_'
+    local visits = story_table.visits[knot][stitch] or { _root = 0 }
+
+    visits._root = visits._root + 1
+    story_table.visits[knot][stitch] = visits
+  end
+
+  if path.label ~= nil then
+    local knot, stitch, label = path.knot or '_', path.stitch or '_', path.label
+    story_table.visits[knot] = story_table.visits[knot] or { _root = 1, _ = { _root = 1 } }
+    story_table.visits[knot][stitch] = story_table.visits[knot][stitch] or { _root = 1 }
+
+    local visits = story_table.visits[knot][stitch][label] or 0
+    visits = visits + 1
+    story_table.visits[knot][stitch][path.label] = visits
+  end
+
+  story_table.current_path = lume.clone(path)
+  story_table.current_path.label = nil
+  story_table.temp = path_is_changed and { } or story_table.temp
+end
+
+---@private
 function story:get_visits_for_path(path)
   if path == nil then
     return 0
@@ -1105,9 +2034,48 @@ function story:get_visits_for_path(path)
 end
 
 ---@private
+function get_visits_for_path(story_table, path)
+  if path == nil then
+    return 0
+  end
+
+  local knot, stitch, label = path.knot or '_', path.stitch, path.label
+
+  if stitch == nil and label ~= nil then
+    stitch = '_'
+  end
+
+  local knot_visits = story_table.visits[knot]
+
+  if knot_visits == nil then
+    return 0
+  elseif stitch == nil then
+    return knot_visits._root or 0
+  end
+
+  local stitch_visits = knot_visits[stitch]
+
+  if stitch_visits == nil then
+    return 0
+  elseif label == nil then
+    return stitch_visits._root or 0
+  end
+
+  local label_visits = stitch_visits[label]
+  return label_visits or 0
+end
+
+---@private
 function story:get_visits_with_context(path_string, context)
   local path = self:path_from_string(path_string, context)
   local visits_count = self:get_visits_for_path(path)
+  return visits_count
+end
+
+---@private
+function get_visits_with_context(story_table, path_string, context)
+  local path = path_from_string(story_table, path_string, context)
+  local visits_count = get_visits_for_path(story_table, path)
   return visits_count
 end
 
@@ -1212,6 +2180,107 @@ function story:path_from_string(path_string, context)
   return path
 end
 
+---@private
+function path_from_string(story_table, path_string, context)
+  local path_string = path_string or ''
+  local context_knot = context and context.knot
+  local context_stitch = context and context.stitch
+
+  context_knot = context_knot or '_'
+  context_stitch = context_stitch or '_'
+
+  -- Try to parse 'part1.part2.part3'
+  local part1, part2, part3 = path_string:match('([%w_]+)%.([%w_]+)%.([%w_]+)')
+
+  if not part1 then
+    -- Try to parse 'part1.part2'
+    part1, part2 = path_string:match('([%w_]+)%.([%w_]+)')
+  end
+
+  if not part1 then
+    -- Try to parse 'part1'
+    part1 = #path_string > 0 and path_string or nil
+  end
+
+  local path = { }
+
+  if not part1 then
+    -- Path is empty
+    return path
+  end
+
+  if part3 then
+    -- Path is 'part1.part2.part3'
+    path.knot = part1
+    path.stitch = part2
+    path.label = part3
+
+    return path
+  end
+
+  if part2 then
+    -- Path is 'part1.part2'
+
+    if story_table.tree[part1] and story_table.tree[part1][part2] then
+      -- Knot 'part1' and stitch 'part2' exist so return part1.part2
+      path.knot = part1
+      path.stitch = part2
+
+      return path
+    end
+
+    if story_table.tree[context_knot][part1] then
+      -- Stitch 'part1' exists so return context_knot.part1.part2
+      path.knot = context_knot
+      path.stitch = part1
+      path.label = part2
+
+      return path
+    end
+
+    if story_table.tree[part1] then
+      -- Knot 'part1' exists so seems it's a label with a root stitch
+      path.knot = part1
+      path.stitch = '_'
+      path.label = part2
+
+      return path
+    end
+
+    if story_table.tree._[part1] then
+      -- Root stitch 'part1' exists so return _.part1.part2
+      path.knot = '_'
+      path.stitch = part1
+      path.label = part2
+
+      return path
+    end
+  end
+
+  if part1 then
+    -- Path is 'part1'
+    if story_table.tree[context_knot][part1] then
+      -- Stitch 'part1' exists so return context_knot.part1
+      path.knot = context_knot
+      path.stitch = part1
+
+      return path
+    elseif story_table.tree[part1] then
+      -- Knot 'part1' exists so return part1
+      path.knot = part1
+
+      return path
+    else
+      -- Seems it's a label
+      path.knot = context_knot
+      path.stitch = context_stitch
+      path.label = part1
+    end
+  end
+
+  return path
+end
+
 
 -- Ink functions
 
@@ -1250,4 +2319,47 @@ function story:ink_functions()
   }
 end
 
-return story
+---@private
+function ink_functions(story_table)
+  return {
+    CHOICE_COUNT = function() return #story_table.choices end,
+    SEED_RANDOM = function(seed) story_table.debug_seed = seed end,
+    POW = function(x, y) return math.pow and math.pow(x, y) or x ^ y end,
+
+    RANDOM = function(x, y)
+      math.randomseed(story_table.debug_seed or os.time() * 1000)
+      return math.random(x, y)
+    end,
+
+    INT = function(x) return math.floor(x) end,
+    FLOOR = function(x) return math.floor(x) end,
+    FLOAT = function(x) return x end,
+
+    -- TURNS = function() return nil end -- TODO
+    -- TURNS_SINCE = function(path) return nil end -- TODO
+
+    LIST_VALUE = function(list) return story_table.list_mt.first_raw_value_of(list) end,
+    LIST_COUNT = function(list) return story_table.list_mt.__len(list) end,
+    LIST_MIN = function(list) return story_table.list_mt.min_value_of(list) end,
+    LIST_MAX = function(list) return story_table.list_mt.max_value_of(list) end,
+
+    LIST_RANDOM = function(list)
+      math.randomseed(story_table.debug_seed or os.time() * 1000)
+      return story_table.list_mt.random_value_of(list)
+    end,
+
+    LIST_ALL = function(list) return story_table.list_mt.posible_values_of(list) end,
+    LIST_RANGE = function(list, min, max) return story_table.list_mt.range_of(list, min, max) end,
+    LIST_INVERT = function(list) return story_table.list_mt.invert(list) end
+  }
+end
+
+return {
+  new = new,
+  begin = begin,
+  can_continue = can_continue,
+  can_choose = can_choose,
+  continue = continue,
+  get_choices = get_choices,
+  choose = choose,
+}
