@@ -28,7 +28,7 @@ function narrator.continue(story)
     end
     local choices = Story.get_choices(story)
     local content = { paragraphs = paragraph_table, choices = choices }
-    return content
+    return { content = content, story = story }
   end
 end
 
